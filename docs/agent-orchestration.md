@@ -10,6 +10,7 @@ docs/work-history/
     phase1_work-summary/
       task.md
       run.json
+      summary.json
       cycle-01/
         plan.prompt.md
         plan.md
@@ -218,6 +219,51 @@ python scripts/orchestrate_agents.py `
 
 For CI-style usage where an unfinished see review should fail the command, add
 `--require-pass`.
+
+## AI Main Output
+
+When the caller is a main AI model, prefer JSON stdout:
+
+```powershell
+python scripts/orchestrate_agents.py `
+  --task docs/tasks/example.md `
+  --preset docs/agent-presets/default-codex.json `
+  --cycles 3 `
+  --require-pass `
+  --output-format json
+```
+
+The script always writes a compact machine-readable summary next to `run.json`:
+
+```text
+docs/work-history/<task_name>/<phase>/summary.json
+```
+
+The summary includes:
+
+- `completed`
+- `exit_code`
+- `next_action`
+- `run_dir`
+- `run_json`
+- `summary_json`
+- `cycles_run`
+- `last_cycle.review_files`
+- compact `see` and `convention` status objects
+
+Use `next_action` as the main routing signal:
+
+- `done`: report the result to the user.
+- `inspect_review_and_rerun`: read the review files and start another cycle or ask for clarification.
+
+To write an extra summary copy for a surrounding agent runtime, pass:
+
+```powershell
+python scripts/orchestrate_agents.py `
+  --task docs/tasks/example.md `
+  --summary-file docs/latest-orchestration-summary.json `
+  --output-format json
+```
 
 Available command placeholders:
 

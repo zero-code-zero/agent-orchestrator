@@ -464,6 +464,58 @@ def write_manifest(path: Path, data: dict) -> None:
     write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
+def compact_agent_status(metadata: dict) -> dict:
+    if not metadata:
+        return {
+            "status": "missing",
+            "score": None,
+            "remaining_issue_count": None,
+        }
+    return {
+        "status": metadata.get("status"),
+        "score": metadata.get("score"),
+        "remaining_issue_count": metadata.get("remaining_issue_count", metadata.get("remaining")),
+    }
+
+
+def build_run_summary(manifest: dict, run_dir: Path, exit_code: int) -> dict:
+    cycles = manifest.get("cycles", [])
+    last_cycle = cycles[-1] if cycles else {}
+    artifacts = last_cycle.get("artifacts", {}) if isinstance(last_cycle, dict) else {}
+    results = last_cycle.get("results", {}) if isinstance(last_cycle, dict) else {}
+    metadata = last_cycle.get("metadata", {}) if isinstance(last_cycle, dict) else {}
+    completed = bool(manifest.get("completed", False))
+    next_action = "done" if completed else "inspect_review_and_rerun"
+    review_files = [
+        path for key, path in artifacts.items()
+        if key in {"see", "convention"} and path
+    ]
+    return {
+        "schema_version": 1,
+        "completed": completed,
+        "exit_code": exit_code,
+        "next_action": next_action,
+        "run_name": manifest.get("run_name"),
+        "task_name": manifest.get("task_name"),
+        "phase": manifest.get("phase"),
+        "task_file": manifest.get("task_file"),
+        "run_dir": manifest.get("run_dir"),
+        "run_json": rel(run_dir / "run.json"),
+        "summary_json": rel(run_dir / "summary.json"),
+        "cycles_run": len(cycles),
+        "max_cycles": manifest.get("max_cycles"),
+        "min_score": manifest.get("min_score"),
+        "last_cycle": {
+            "cycle": last_cycle.get("cycle") if isinstance(last_cycle, dict) else None,
+            "artifacts": artifacts,
+            "review_files": review_files,
+            "checks": results.get("checks", []),
+            "see": compact_agent_status(metadata.get("see", {})),
+            "convention": compact_agent_status(metadata.get("convention", {})),
+        },
+    }
+
+
 def run_check_commands(commands: Iterable[str], cycle_dir: Path) -> list[dict]:
     results: list[dict] = []
     for index, command in enumerate(commands, start=1):
@@ -509,6 +561,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cycles", type=int, default=None, help="Maximum loop cycles.")
     parser.add_argument("--min-score", type=int, default=None, help="Minimum see score for completion.")
     parser.add_argument("--require-pass", action="store_true", help="Exit non-zero when see does not pass.")
+    parser.add_argument("--output-format", choices=["text", "json"], default="text", help="Final stdout format for the main caller.")
+    parser.add_argument("--summary-file", default=None, help="Optional extra JSON summary path to write inside the repository.")
     parser.add_argument("--plan", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--do", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--see", action=argparse.BooleanOptionalAction, default=None)
@@ -862,11 +916,20 @@ def main() -> int:
     manifest["completed"] = completed
     manifest["finished_at"] = dt.datetime.now().isoformat()
     manifest["run_hash"] = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    exit_code = 0 if completed or not args.require_pass else 1
+    summary = build_run_summary(manifest, run_dir, exit_code)
     write_manifest(run_dir / "run.json", manifest)
+    write_manifest(run_dir / "summary.json", summary)
+    if args.summary_file:
+        write_manifest(repo_path(args.summary_file), summary)
 
-    print(f"Run artifacts: {rel(run_dir)}")
-    print(f"Completed: {completed}")
-    return 0 if completed or not args.require_pass else 1
+    if args.output_format == "json":
+        print(json.dumps(summary, ensure_ascii=False))
+    else:
+        print(f"Run artifacts: {rel(run_dir)}")
+        print(f"Completed: {completed}")
+        print(f"Summary: {rel(run_dir / 'summary.json')}")
+    return exit_code
 
 
 if __name__ == "__main__":
