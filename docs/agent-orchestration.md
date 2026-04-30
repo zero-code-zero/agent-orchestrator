@@ -98,6 +98,7 @@ python scripts/orchestrate_agents.py `
   --task docs/tasks/example.md `
   --codex `
   --cycles 3 `
+  --agent-timeout 900 `
   --check-cmd "npm run build"
 ```
 
@@ -238,6 +239,22 @@ Example preset:
 CLI arguments override preset values for the same field. For example,
 `--do-provider gemini` overrides `agents.do.provider` from the preset.
 
+Presets may also provide timeout guards:
+
+```json
+{
+  "agent_timeout_seconds": 900,
+  "check_timeout_seconds": 300,
+  "agents": {
+    "convention": { "timeout_seconds": 600 }
+  }
+}
+```
+
+The equivalent CLI flags are `--agent-timeout`, `--check-timeout`,
+`--plan-timeout`, `--do-timeout`, `--see-timeout`, and
+`--convention-timeout`.
+
 Run with external agent command templates:
 
 ```powershell
@@ -273,6 +290,10 @@ The script always writes a compact machine-readable summary next to `run.json`:
 ```text
 docs/work-history/<task_name>/<phase>/summary.json
 ```
+
+`run.json` and `summary.json` are updated after each completed stage. If a run
+times out or is interrupted, inspect the latest `summary.json` first; it should
+show the last completed cycle artifacts and the recommended `next_action`.
 
 The summary includes:
 

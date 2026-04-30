@@ -85,6 +85,7 @@ python "$skillRoot\scripts\orchestrate_agents.py" `
   --task docs\tasks\my-task.md `
   --preset "$skillRoot\docs\agent-presets\default-codex.json" `
   --cycles 3 `
+  --agent-timeout 900 `
   --require-pass `
   --output-format json
 ```
@@ -98,6 +99,7 @@ python3 "$SKILL_ROOT/scripts/orchestrate_agents.py" \
   --task docs/tasks/my-task.md \
   --preset "$SKILL_ROOT/docs/agent-presets/default-codex.json" \
   --cycles 3 \
+  --agent-timeout 900 \
   --require-pass \
   --output-format json
 ```
@@ -115,6 +117,11 @@ Read JSON stdout or `summary.json`.
   or ask the user for clarification.
 
 Use `run.json` only when the compact summary is insufficient.
+
+If a run times out or is interrupted, prefer `summary.json` first. The script
+updates `run.json` and `summary.json` after each completed stage, so partial
+runs should still show the last completed artifact and whether inspection or a
+rerun is needed.
 
 ## File Discipline
 

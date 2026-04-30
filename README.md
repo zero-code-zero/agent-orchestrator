@@ -29,6 +29,11 @@ Output:
 - Optional JSON stdout with `--output-format json`.
 - Per-cycle prompt and response files for every role.
 
+During a run, `run.json` and `summary.json` are updated after each completed
+stage. If an agent command times out or the parent process is interrupted, the
+latest files should still show the last completed stage and the next action for
+inspection.
+
 Exit behavior:
 
 - Exit code `0` when the run is complete, or when `--require-pass` is not set.
@@ -301,6 +306,21 @@ python scripts\orchestrate_agents.py `
 
 Check results are passed into `see`, so the review agent can use parent-run
 evidence instead of rerunning commands unnecessarily.
+
+Long-running agents and checks can be bounded:
+
+```powershell
+python scripts\orchestrate_agents.py `
+  --task docs\tasks\my-task.md `
+  --agent-timeout 900 `
+  --check-timeout 300 `
+  --output-format json
+```
+
+Per-agent overrides are also available: `--plan-timeout`, `--do-timeout`,
+`--see-timeout`, and `--convention-timeout`. The same values can be placed in
+presets with `agent_timeout_seconds`, `check_timeout_seconds`, or per-agent
+`timeout_seconds`.
 
 ## Platform Notes
 

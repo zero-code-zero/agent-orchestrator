@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -45,6 +46,7 @@ class AgentConfig:
     name: str
     command: str | None
     enabled: bool
+    timeout_seconds: int | None = None
 
 
 @dataclass
@@ -53,6 +55,8 @@ class CommandResult:
     return_code: int | None
     stdout: str
     stderr: str
+    timed_out: bool = False
+    timeout_seconds: int | None = None
 
 
 def truncate_text(value: str | None, limit: int = MAX_RESULT_OUTPUT_CHARS) -> str:
@@ -153,6 +157,76 @@ def command_placeholders(command: str) -> set[str]:
     }
 
 
+def terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+        )
+        return
+
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except OSError:
+        process.kill()
+
+
+def run_shell_command(
+    command: str,
+    *,
+    cwd: Path,
+    input_text: str | None = None,
+    timeout_seconds: int | None = None,
+) -> CommandResult:
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        shell=True,
+        creationflags=creationflags,
+        start_new_session=os.name != "nt",
+    )
+
+    try:
+        stdout, stderr = process.communicate(input=input_text, timeout=timeout_seconds)
+        return CommandResult(
+            status="ok" if process.returncode == 0 else "failed",
+            return_code=process.returncode,
+            stdout=truncate_text(stdout),
+            stderr=truncate_text(stderr),
+            timed_out=False,
+            timeout_seconds=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        terminate_process_tree(process)
+        stdout, stderr = process.communicate()
+        timeout_message = f"Command timed out after {timeout_seconds} seconds."
+        stderr = "\n".join(part for part in [stderr, timeout_message] if part)
+        return CommandResult(
+            status="timeout",
+            return_code=None,
+            stdout=truncate_text(stdout),
+            stderr=truncate_text(stderr),
+            timed_out=True,
+            timeout_seconds=timeout_seconds,
+        )
+
+
 def run_agent_command(
     config: AgentConfig,
     prompt_file: Path,
@@ -165,11 +239,11 @@ def run_agent_command(
 
     if not config.enabled:
         write_text(output_file, placeholder_output(config.name, "disabled"))
-        return CommandResult("disabled", None, "", "")
+        return CommandResult("disabled", None, "", "", timeout_seconds=config.timeout_seconds)
 
     if not config.command:
         write_text(output_file, placeholder_output(config.name, "command-not-configured"))
-        return CommandResult("command-not-configured", None, "", "")
+        return CommandResult("command-not-configured", None, "", "", timeout_seconds=config.timeout_seconds)
 
     values = {
         "prompt_file": str(prompt_file),
@@ -184,19 +258,33 @@ def run_agent_command(
     placeholders = command_placeholders(config.command)
     pipe_prompt = "prompt_file" not in placeholders
 
-    completed = subprocess.run(
+    completed = run_shell_command(
         command,
         cwd=REPO_ROOT,
-        input=prompt_text if pipe_prompt else None,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        shell=True,
-        check=False,
+        input_text=prompt_text if pipe_prompt else None,
+        timeout_seconds=config.timeout_seconds,
     )
 
-    if "output_file" not in placeholders:
+    if completed.timed_out:
+        write_text(
+            output_file,
+            "\n".join([
+                f"# {config.name} timed out",
+                "",
+                f"The configured command exceeded {config.timeout_seconds} seconds and its process tree was terminated.",
+                "",
+                "## Captured stdout",
+                "```text",
+                completed.stdout or "",
+                "```",
+                "",
+                "## Captured stderr",
+                "```text",
+                completed.stderr or "",
+                "```",
+            ]),
+        )
+    elif "output_file" not in placeholders:
         write_text(output_file, completed.stdout or "")
     elif not output_file.exists():
         write_text(
@@ -218,12 +306,7 @@ def run_agent_command(
             ]),
         )
 
-    return CommandResult(
-        status="ok" if completed.returncode == 0 else "failed",
-        return_code=completed.returncode,
-        stdout=truncate_text(completed.stdout),
-        stderr=truncate_text(completed.stderr),
-    )
+    return completed
 
 
 def placeholder_output(agent: str, reason: str) -> str:
@@ -336,6 +419,10 @@ def build_do_prompt(task_text: str, plan_text: str, cycle: int) -> str:
 You are the implementation agent. You are pragmatic, careful, and repo-native.
 Only you may edit production code. Do not broaden scope beyond the plan. Preserve
 unrelated user changes.
+
+If the workspace is not a Git repository, do not treat `git status` failures as
+task failures. Report changed files from the files you edited and from the
+orchestrator artifacts instead.
 
 ## Main Context Summary
 {task_text}
@@ -494,6 +581,34 @@ def compact_agent_status(metadata: dict) -> dict:
     }
 
 
+def compact_command_status(result: dict | None) -> dict:
+    if not result:
+        return {
+            "status": "missing",
+            "return_code": None,
+            "timed_out": False,
+        }
+    return {
+        "status": result.get("status"),
+        "return_code": result.get("return_code"),
+        "timed_out": bool(result.get("timed_out", False)),
+    }
+
+
+def has_blocking_failure(cycle_entry: dict) -> bool:
+    results = cycle_entry.get("results", {})
+    for agent in ("plan", "do", "see", "convention"):
+        status = results.get(agent, {}).get("status")
+        if status in {"failed", "timeout"}:
+            return True
+
+    for check in results.get("checks", []):
+        if check.get("status") != "ok" or check.get("return_code") != 0:
+            return True
+
+    return False
+
+
 def build_run_summary(manifest: dict, run_dir: Path, exit_code: int) -> dict:
     cycles = manifest.get("cycles", [])
     last_cycle = cycles[-1] if cycles else {}
@@ -526,24 +641,32 @@ def build_run_summary(manifest: dict, run_dir: Path, exit_code: int) -> dict:
             "artifacts": artifacts,
             "review_files": review_files,
             "checks": results.get("checks", []),
+            "agents": {
+                "plan": compact_command_status(results.get("plan")),
+                "do": compact_command_status(results.get("do")),
+                "see": compact_command_status(results.get("see")),
+                "convention": compact_command_status(results.get("convention")),
+            },
             "see": compact_agent_status(metadata.get("see", {})),
             "convention": compact_agent_status(metadata.get("convention", {})),
         },
     }
 
 
-def run_check_commands(commands: Iterable[str], cycle_dir: Path) -> list[dict]:
+def write_run_state(manifest: dict, run_dir: Path, exit_code: int) -> dict:
+    write_manifest(run_dir / "run.json", manifest)
+    summary = build_run_summary(manifest, run_dir, exit_code)
+    write_manifest(run_dir / "summary.json", summary)
+    return summary
+
+
+def run_check_commands(commands: Iterable[str], cycle_dir: Path, timeout_seconds: int | None = None) -> list[dict]:
     results: list[dict] = []
     for index, command in enumerate(commands, start=1):
-        completed = subprocess.run(
+        completed = run_shell_command(
             command,
             cwd=REPO_ROOT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            shell=True,
-            check=False,
+            timeout_seconds=timeout_seconds,
         )
         log_file = cycle_dir / f"check-{index}.log"
         write_text(
@@ -560,8 +683,11 @@ def run_check_commands(commands: Iterable[str], cycle_dir: Path) -> list[dict]:
         )
         results.append({
             "command": command,
-            "return_code": completed.returncode,
+            "return_code": completed.return_code,
             "log": rel(log_file),
+            "status": completed.status,
+            "timed_out": completed.timed_out,
+            "timeout_seconds": timeout_seconds,
         })
     return results
 
@@ -580,6 +706,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--require-pass", action="store_true", help="Exit non-zero when see does not pass.")
     parser.add_argument("--output-format", choices=["text", "json"], default="text", help="Final stdout format for the main caller.")
     parser.add_argument("--summary-file", default=None, help="Optional extra JSON summary path to write inside the repository.")
+    parser.add_argument("--agent-timeout", type=int, default=None, help="Default timeout in seconds for each agent command.")
+    parser.add_argument("--check-timeout", type=int, default=None, help="Timeout in seconds for each check command.")
+    parser.add_argument("--plan-timeout", type=int, default=None, help="Timeout in seconds for the plan agent.")
+    parser.add_argument("--do-timeout", type=int, default=None, help="Timeout in seconds for the do agent.")
+    parser.add_argument("--see-timeout", type=int, default=None, help="Timeout in seconds for the see agent.")
+    parser.add_argument("--convention-timeout", type=int, default=None, help="Timeout in seconds for the convention agent.")
     parser.add_argument("--plan", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--do", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--see", action=argparse.BooleanOptionalAction, default=None)
@@ -651,6 +783,33 @@ def preset_int(preset: dict, key: str, default: int) -> int:
     if value is None:
         return default
     return int(value)
+
+
+def optional_int(value: str | int | None) -> int | None:
+    return int(value) if value is not None else None
+
+
+def resolve_timeout(
+    explicit_timeout: int | None,
+    preset: dict,
+    agent: str,
+    default_timeout: int | None,
+) -> int | None:
+    if explicit_timeout is not None:
+        return explicit_timeout
+
+    agent_timeout = (
+        preset_agent_value(preset, agent, "timeout_seconds")
+        or preset_agent_value(preset, agent, "timeout")
+    )
+    if agent_timeout is not None:
+        return int(agent_timeout)
+
+    preset_default = preset.get("agent_timeout_seconds", preset.get("agent_timeout"))
+    if preset_default is not None:
+        return int(preset_default)
+
+    return default_timeout
 
 
 def merge_checks(cli_checks: list[str], preset: dict) -> list[str]:
@@ -749,6 +908,8 @@ def main() -> int:
     args.readonly_guard = args.readonly_guard if args.readonly_guard is not None else preset_bool(preset, "readonly_guard", True)
     checks_enabled = args.checks if args.checks is not None else preset_bool(preset, "checks_enabled", True)
     args.check_cmd = merge_checks(args.check_cmd, preset) if checks_enabled else []
+    args.agent_timeout = args.agent_timeout if args.agent_timeout is not None else optional_int(preset.get("agent_timeout_seconds", preset.get("agent_timeout")))
+    args.check_timeout = args.check_timeout if args.check_timeout is not None else optional_int(preset.get("check_timeout_seconds", preset.get("check_timeout")))
 
     task_file = repo_path(args.task)
     if not task_file.exists():
@@ -782,6 +943,7 @@ def main() -> int:
                 args.gemini_model,
             ),
             args.plan,
+            resolve_timeout(args.plan_timeout, preset, "plan", args.agent_timeout),
         ),
         "do": AgentConfig(
             "do",
@@ -795,6 +957,7 @@ def main() -> int:
                 args.gemini_model,
             ),
             args.do,
+            resolve_timeout(args.do_timeout, preset, "do", args.agent_timeout),
         ),
         "see": AgentConfig(
             "see",
@@ -808,6 +971,7 @@ def main() -> int:
                 args.gemini_model,
             ),
             args.see,
+            resolve_timeout(args.see_timeout, preset, "see", args.agent_timeout),
         ),
         "convention": AgentConfig(
             "convention",
@@ -821,6 +985,7 @@ def main() -> int:
                 args.gemini_model,
             ),
             args.convention,
+            resolve_timeout(args.convention_timeout, preset, "convention", args.agent_timeout),
         ),
     }
 
@@ -835,9 +1000,17 @@ def main() -> int:
         "started_at": dt.datetime.now().isoformat(),
         "max_cycles": args.cycles,
         "min_score": args.min_score,
+        "timeouts": {
+            "agent_timeout_seconds": args.agent_timeout,
+            "check_timeout_seconds": args.check_timeout,
+            "plan_timeout_seconds": configs["plan"].timeout_seconds,
+            "do_timeout_seconds": configs["do"].timeout_seconds,
+            "see_timeout_seconds": configs["see"].timeout_seconds,
+            "convention_timeout_seconds": configs["convention"].timeout_seconds,
+        },
         "cycles": [],
     }
-    write_manifest(run_dir / "run.json", manifest)
+    write_run_state(manifest, run_dir, 1)
 
     previous_see = ""
     previous_convention = ""
@@ -846,7 +1019,15 @@ def main() -> int:
     for cycle in range(1, args.cycles + 1):
         cycle_dir = run_dir / f"cycle-{cycle:02d}"
         cycle_dir.mkdir(parents=True, exist_ok=False)
-        cycle_entry: dict = {"cycle": cycle, "artifacts": {}, "results": {}}
+        cycle_entry: dict = {
+            "cycle": cycle,
+            "status": "in_progress",
+            "started_at": dt.datetime.now().isoformat(),
+            "artifacts": {},
+            "results": {},
+        }
+        manifest["cycles"].append(cycle_entry)
+        write_run_state(manifest, run_dir, 1)
 
         plan_prompt = build_plan_prompt(task_text, previous_see, previous_convention, cycle)
         plan_prompt_file = cycle_dir / "plan.prompt.md"
@@ -862,6 +1043,7 @@ def main() -> int:
                 write_text(cycle_dir / "plan.readonly-warning.md", "\n".join(["# Plan changed repository files", "", *plan_changes]))
         cycle_entry["results"]["plan"] = plan_result.__dict__
         cycle_entry["artifacts"]["plan"] = rel(plan_file)
+        write_run_state(manifest, run_dir, 1)
 
         plan_text = read_text(plan_file)
 
@@ -872,10 +1054,12 @@ def main() -> int:
         do_result = run_agent_command(configs["do"], do_prompt_file, do_file, run_dir, cycle_dir, cycle)
         cycle_entry["results"]["do"] = do_result.__dict__
         cycle_entry["artifacts"]["do"] = rel(do_file)
+        write_run_state(manifest, run_dir, 1)
 
-        check_results = run_check_commands(args.check_cmd, cycle_dir)
+        check_results = run_check_commands(args.check_cmd, cycle_dir, args.check_timeout)
         if check_results:
             cycle_entry["results"]["checks"] = check_results
+            write_run_state(manifest, run_dir, 1)
 
         do_text = read_text(do_file)
 
@@ -896,6 +1080,7 @@ def main() -> int:
             see_text = read_text(see_file)
             cycle_entry["results"]["see"] = see_result.__dict__
             cycle_entry["artifacts"]["see"] = rel(see_file)
+            write_run_state(manifest, run_dir, 1)
 
         if configs["convention"].enabled:
             convention_prompt = build_convention_prompt(task_text, plan_text, do_text, see_text, cycle)
@@ -912,6 +1097,7 @@ def main() -> int:
             convention_text = read_text(convention_file)
             cycle_entry["results"]["convention"] = convention_result.__dict__
             cycle_entry["artifacts"]["convention"] = rel(convention_file)
+            write_run_state(manifest, run_dir, 1)
 
         see_metadata = extract_json_metadata(see_text, "see") if cycle_entry["results"].get("see", {}).get("status") == "ok" else {}
         convention_metadata = extract_json_metadata(convention_text, "convention") if cycle_entry["results"].get("convention", {}).get("status") == "ok" else {}
@@ -919,15 +1105,17 @@ def main() -> int:
             "see": see_metadata,
             "convention": convention_metadata,
         }
-        manifest["cycles"].append(cycle_entry)
-        write_manifest(run_dir / "run.json", manifest)
+        cycle_entry["status"] = "completed"
+        cycle_entry["finished_at"] = dt.datetime.now().isoformat()
+        write_run_state(manifest, run_dir, 1)
 
         previous_see = see_text
         previous_convention = convention_text
 
+        blocking_failed = has_blocking_failure(cycle_entry)
         see_passed = not configs["see"].enabled or has_passed(see_metadata, args.min_score)
         convention_passed = not configs["convention"].enabled or has_passed(convention_metadata, args.min_score)
-        if see_passed and convention_passed:
+        if not blocking_failed and see_passed and convention_passed:
             completed = True
             break
 
@@ -935,9 +1123,7 @@ def main() -> int:
     manifest["finished_at"] = dt.datetime.now().isoformat()
     manifest["run_hash"] = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     exit_code = 0 if completed or not args.require_pass else 1
-    summary = build_run_summary(manifest, run_dir, exit_code)
-    write_manifest(run_dir / "run.json", manifest)
-    write_manifest(run_dir / "summary.json", summary)
+    summary = write_run_state(manifest, run_dir, exit_code)
     if args.summary_file:
         write_manifest(repo_path(args.summary_file), summary)
 
