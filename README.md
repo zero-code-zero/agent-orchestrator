@@ -37,6 +37,92 @@ Exit behavior:
 For AI agents, `SKILL.md` is the shortest operational entry point. It makes the
 task markdown context summary mandatory before delegation.
 
+## Skill Installation
+
+This repository is also a Codex skill folder because it contains `SKILL.md` at
+the root.
+
+Install on Windows:
+
+```powershell
+$skillsRoot = if ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "skills" } else { Join-Path $HOME ".codex\skills" }
+New-Item -ItemType Directory -Force $skillsRoot | Out-Null
+git clone git@github.com:zero-code-zero/agent-orchestrator.git (Join-Path $skillsRoot "agent-orchestrator")
+```
+
+Install on Linux:
+
+```bash
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+mkdir -p "$SKILLS_ROOT"
+git clone git@github.com:zero-code-zero/agent-orchestrator.git "$SKILLS_ROOT/agent-orchestrator"
+```
+
+Update an installed skill:
+
+```powershell
+$skillRoot = if ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "skills\agent-orchestrator" } else { Join-Path $HOME ".codex\skills\agent-orchestrator" }
+git -C $skillRoot pull
+```
+
+On Linux:
+
+```bash
+git -C "${CODEX_HOME:-$HOME/.codex}/skills/agent-orchestrator" pull
+```
+
+Start a new Codex session after installation or update so the skill metadata is
+loaded.
+
+## Skill Usage
+
+Ask Codex to use the `agent-orchestrator` skill when a task should be delegated
+through a structured development loop.
+
+Example request:
+
+```text
+Use the agent-orchestrator skill. Summarize this conversation into a task file,
+then run a plan/do/see/convention loop with JSON output.
+```
+
+The skill should:
+
+1. Summarize the conversation into a self-contained `docs/tasks/*.md` file in
+   the target workspace.
+2. Run the bundled script with `--workspace` pointing at that target workspace.
+3. Use `--output-format json`.
+4. Read `summary.json`.
+5. If `next_action` is `done`, report the result.
+6. If `next_action` is `inspect_review_and_rerun`, read the review files and
+   decide whether to rerun or ask for clarification.
+
+Installed skill invocation shape:
+
+```powershell
+$skillRoot = if ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "skills\agent-orchestrator" } else { Join-Path $HOME ".codex\skills\agent-orchestrator" }
+python "$skillRoot\scripts\orchestrate_agents.py" `
+  --workspace . `
+  --task docs\tasks\my-task.md `
+  --preset "$skillRoot\docs\agent-presets\default-codex.json" `
+  --cycles 3 `
+  --require-pass `
+  --output-format json
+```
+
+On Linux:
+
+```bash
+SKILL_ROOT="${CODEX_HOME:-$HOME/.codex}/skills/agent-orchestrator"
+python3 "$SKILL_ROOT/scripts/orchestrate_agents.py" \
+  --workspace . \
+  --task docs/tasks/my-task.md \
+  --preset "$SKILL_ROOT/docs/agent-presets/default-codex.json" \
+  --cycles 3 \
+  --require-pass \
+  --output-format json
+```
+
 ## Requirements
 
 - Python 3.10 or newer.

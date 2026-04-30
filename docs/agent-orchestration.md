@@ -61,6 +61,17 @@ Generate prompts and artifact folders only:
 python scripts/orchestrate_agents.py --task docs/tasks/example.md --cycles 1
 ```
 
+If the orchestrator is installed as a skill outside the target project, pass the
+target project explicitly:
+
+```powershell
+python C:\Users\you\.codex\skills\agent-orchestrator\scripts\orchestrate_agents.py `
+  --workspace C:\path\to\target-project `
+  --task docs/tasks/example.md `
+  --preset C:\Users\you\.codex\skills\agent-orchestrator\docs\agent-presets\default-codex.json `
+  --output-format json
+```
+
 Specify task and phase folders:
 
 ```powershell
@@ -156,6 +167,21 @@ Per-agent providers can also be set with environment variables:
 - `AGENT_DO_MODEL`
 - `AGENT_SEE_MODEL`
 - `AGENT_CONVENTION_MODEL`
+
+## Workspace Root
+
+By default, the script treats the directory above `scripts/orchestrate_agents.py`
+as the workspace. This is convenient when the script is vendored into a project.
+
+For installed skill usage, pass `--workspace` so task files, history artifacts,
+checks, and delegated agent commands run against the target project:
+
+```powershell
+python path\to\agent-orchestrator\scripts\orchestrate_agents.py `
+  --workspace C:\path\to\target-project `
+  --task docs/tasks/example.md `
+  --output-format json
+```
 
 ## JSON Presets
 

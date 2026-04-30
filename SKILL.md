@@ -70,9 +70,11 @@ user a short clarification question before running the orchestrator.
 Prefer JSON output for AI callers:
 
 ```powershell
-python scripts\orchestrate_agents.py `
+$skillRoot = if ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "skills\agent-orchestrator" } else { Join-Path $HOME ".codex\skills\agent-orchestrator" }
+python "$skillRoot\scripts\orchestrate_agents.py" `
+  --workspace . `
   --task docs\tasks\my-task.md `
-  --preset docs\agent-presets\default-codex.json `
+  --preset "$skillRoot\docs\agent-presets\default-codex.json" `
   --cycles 3 `
   --require-pass `
   --output-format json
@@ -81,13 +83,18 @@ python scripts\orchestrate_agents.py `
 On Linux, use `python3` and slash paths:
 
 ```bash
-python3 scripts/orchestrate_agents.py \
+SKILL_ROOT="${CODEX_HOME:-$HOME/.codex}/skills/agent-orchestrator"
+python3 "$SKILL_ROOT/scripts/orchestrate_agents.py" \
+  --workspace . \
   --task docs/tasks/my-task.md \
-  --preset docs/agent-presets/default-codex.json \
+  --preset "$SKILL_ROOT/docs/agent-presets/default-codex.json" \
   --cycles 3 \
   --require-pass \
   --output-format json
 ```
+
+When the script is vendored directly inside the target repository, calling
+`python scripts/orchestrate_agents.py` without `--workspace` is also valid.
 
 ## Interpret Results
 

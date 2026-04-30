@@ -23,7 +23,8 @@ from string import Formatter
 from typing import Iterable
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = SCRIPT_ROOT
 DEFAULT_HISTORY_ROOT = Path("docs/work-history")
 DEFAULT_MIN_SCORE = 90
 IGNORED_DIRS = {
@@ -120,6 +121,21 @@ def ensure_path_inside_repo(path: Path) -> Path:
     except ValueError as exc:
         raise ValueError(f"Path must stay inside repository: {path}") from exc
     return resolved
+
+
+def configure_workspace(value: str | None) -> None:
+    global REPO_ROOT
+    if not value:
+        REPO_ROOT = SCRIPT_ROOT
+        return
+
+    path = Path(value)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    resolved = path.resolve()
+    if not resolved.exists() or not resolved.is_dir():
+        raise FileNotFoundError(f"Workspace directory not found: {resolved}")
+    REPO_ROOT = resolved
 
 
 def repo_path(value: str | Path) -> Path:
@@ -553,6 +569,7 @@ def run_check_commands(commands: Iterable[str], cycle_dir: Path) -> list[dict]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run plan/do/see development agent cycles.")
     parser.add_argument("--task", required=True, help="Markdown file with main context summary and task goals.")
+    parser.add_argument("--workspace", default=None, help="Target workspace root. Defaults to the directory above this script.")
     parser.add_argument("--preset", default=None, help="JSON preset file for providers, models, commands, and checks.")
     parser.add_argument("--task-name", default=None, help="Stable task folder name under history root.")
     parser.add_argument("--phase", default=None, help="Phase folder name, for example `phase1_smoke-note`.")
@@ -721,6 +738,7 @@ def resolve_agent_command(
 
 def main() -> int:
     args = parse_args()
+    configure_workspace(args.workspace)
     preset = load_preset(args.preset)
     args.cycles = int(args.cycles if args.cycles is not None else preset_int(preset, "cycles", 1))
     args.min_score = int(args.min_score if args.min_score is not None else preset_int(preset, "min_score", DEFAULT_MIN_SCORE))

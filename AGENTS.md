@@ -20,6 +20,7 @@ When working in this repo, read references in this order:
 
 - Prefer `--output-format json` when the script is called by another AI.
 - Do not invoke the orchestrator until a self-contained task markdown exists.
+- When using this repo as an installed skill, pass `--workspace` for the target project.
 - Treat `summary.json` as the compact routing artifact for the main AI.
 - Treat `run.json` as the full audit artifact.
 - Keep task exit criteria numeric or objectively measurable.
