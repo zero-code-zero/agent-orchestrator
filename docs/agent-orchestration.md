@@ -30,6 +30,15 @@ docs/work-history/
 - See: compares the plan against the implementation and writes a review.
 - Convention: runs after see and checks whether the result follows repo conventions.
 
+## Model Baseline
+
+The workflow is designed around GPT-5.5-class behavior. The default Codex preset
+uses `gpt-5.5` for all four delegated roles.
+
+If using weaker or older models, compensate in `task.md`: make assumptions,
+scope boundaries, rejected directions, exit criteria, and validation commands
+more explicit.
+
 ## Task File
 
 Create a markdown file for each task, for example:

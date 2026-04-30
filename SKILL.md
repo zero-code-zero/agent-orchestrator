@@ -8,6 +8,15 @@ description: Use when Codex needs to run or prepare an AI-led development loop w
 Use this skill to turn a user goal or conversation context into a bounded
 `plan -> do -> see -> convention` development loop.
 
+## Model Baseline
+
+This skill is designed and tuned for GPT-5.5-class agents as the main caller and
+as the default Codex agent preset.
+
+With weaker or older models, make the task markdown more explicit: spell out
+assumptions, scope boundaries, exit criteria, and validation commands instead
+of relying on the model to infer them.
+
 ## Hard Rule
 
 Do not invoke `scripts/orchestrate_agents.py` until a task markdown file exists.

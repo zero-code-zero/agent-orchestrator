@@ -18,6 +18,8 @@ When working in this repo, read references in this order:
 
 ## Agent Rules
 
+- Treat GPT-5.5-class behavior as the baseline for this skill and default preset.
+- For weaker models, make task markdown more explicit instead of adding vague behavioral rules.
 - Prefer `--output-format json` when the script is called by another AI.
 - Do not invoke the orchestrator until a self-contained task markdown exists.
 - When using this repo as an installed skill, pass `--workspace` for the target project.

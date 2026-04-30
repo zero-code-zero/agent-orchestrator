@@ -133,6 +133,15 @@ python3 "$SKILL_ROOT/scripts/orchestrate_agents.py" \
 Python 3.9 and older are not supported because the script uses modern typing
 syntax such as `str | None`.
 
+## Model Baseline
+
+The skill and default preset are designed around GPT-5.5-class behavior. The
+default Codex preset uses `gpt-5.5` for `plan`, `do`, `see`, and `convention`.
+
+Older or weaker models can still be used, but task files should be more explicit
+about assumptions, rejected directions, scope boundaries, exit criteria, and
+validation commands.
+
 ## Main AI Invocation
 
 Recommended invocation shape:
