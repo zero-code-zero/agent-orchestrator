@@ -34,6 +34,9 @@ Exit behavior:
 - Exit code `0` when the run is complete, or when `--require-pass` is not set.
 - Exit code `1` when `--require-pass` is set and the run does not meet the review threshold.
 
+For AI agents, `SKILL.md` is the shortest operational entry point. It makes the
+task markdown context summary mandatory before delegation.
+
 ## Requirements
 
 - Python 3.10 or newer.

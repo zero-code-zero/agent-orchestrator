@@ -10,14 +10,16 @@ work to `plan`, `do`, `see`, and `convention` agents.
 
 When working in this repo, read references in this order:
 
-1. `README.md`: public contract and main AI invocation pattern.
-2. `docs/agent-orchestration.md`: detailed workflow and CLI reference.
-3. `docs/tasks/*.md`: task input templates and examples.
-4. `docs/agent-presets/*.json`: provider/model/check presets.
+1. `SKILL.md`: AI workflow, task summary contract, and run loop rules.
+2. `README.md`: public contract and main AI invocation pattern.
+3. `docs/agent-orchestration.md`: detailed workflow and CLI reference.
+4. `docs/tasks/*.md`: task input templates and examples.
+5. `docs/agent-presets/*.json`: provider/model/check presets.
 
 ## Agent Rules
 
 - Prefer `--output-format json` when the script is called by another AI.
+- Do not invoke the orchestrator until a self-contained task markdown exists.
 - Treat `summary.json` as the compact routing artifact for the main AI.
 - Treat `run.json` as the full audit artifact.
 - Keep task exit criteria numeric or objectively measurable.
