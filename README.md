@@ -16,11 +16,34 @@ Only the `do` phase is expected to edit project code.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.10 or newer
 - Optional: Codex CLI for the default preset
 - Optional: Gemini CLI for mixed/provider experiments
 
+The script uses modern Python typing syntax such as `str | None`, so Python
+3.9 and older are not supported. There are no required third-party Python
+packages.
+
+Check your Python version:
+
+```powershell
+python --version
+```
+
+On Linux:
+
+```bash
+python3 --version
+```
+
 ## Quick Start
+
+Clone the repository:
+
+```powershell
+git clone git@github.com:zero-code-zero/agent-orchestrator.git
+cd agent-orchestrator
+```
 
 Create a task file:
 
@@ -42,6 +65,58 @@ python scripts\orchestrate_agents.py `
   --preset docs\agent-presets\default-codex.json `
   --cycles 3 `
   --require-pass
+```
+
+## Windows Usage
+
+PowerShell examples use backticks for line continuation:
+
+```powershell
+python scripts\orchestrate_agents.py `
+  --task docs\tasks\my-task.md `
+  --preset docs\agent-presets\default-codex.json `
+  --cycles 3 `
+  --require-pass
+```
+
+If `python` points to the wrong version, use the Python launcher:
+
+```powershell
+py -3.10 scripts\orchestrate_agents.py --task docs\tasks\my-task.md --cycles 1
+```
+
+Compile-check the script without leaving `__pycache__` in the repo:
+
+```powershell
+python -c "import pathlib, py_compile, tempfile; cfile=pathlib.Path(tempfile.gettempdir()) / 'orchestrate_agents.check.pyc'; py_compile.compile('scripts/orchestrate_agents.py', cfile=str(cfile), doraise=True); cfile.unlink(missing_ok=True)"
+```
+
+## Linux Usage
+
+Shell examples use backslashes for line continuation:
+
+```bash
+python3 scripts/orchestrate_agents.py \
+  --task docs/tasks/my-task.md \
+  --preset docs/agent-presets/default-codex.json \
+  --cycles 3 \
+  --require-pass
+```
+
+You can also run the script directly:
+
+```bash
+chmod +x scripts/orchestrate_agents.py
+./scripts/orchestrate_agents.py --task docs/tasks/my-task.md --cycles 1
+```
+
+If `python3` is older than 3.10, call a specific interpreter such as
+`python3.10` or `python3.11`.
+
+Compile-check the script without leaving `__pycache__` in the repo:
+
+```bash
+python3 -c "import pathlib, py_compile, tempfile; cfile=pathlib.Path(tempfile.gettempdir()) / 'orchestrate_agents.check.pyc'; py_compile.compile('scripts/orchestrate_agents.py', cfile=str(cfile), doraise=True); cfile.unlink(missing_ok=True)"
 ```
 
 ## Artifact Layout
