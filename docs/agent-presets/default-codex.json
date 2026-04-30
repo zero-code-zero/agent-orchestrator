@@ -1,0 +1,29 @@
+{
+  "provider": "codex",
+  "task_name": "orchestration-smoke",
+  "phase": "phase1_create-smoke-note",
+  "cycles": 1,
+  "min_score": 90,
+  "readonly_guard": true,
+  "agents": {
+    "plan": {
+      "provider": "codex",
+      "model": "gpt-5.5"
+    },
+    "do": {
+      "provider": "codex",
+      "model": "gpt-5.5"
+    },
+    "see": {
+      "provider": "codex",
+      "model": "gpt-5.5"
+    },
+    "convention": {
+      "provider": "codex",
+      "model": "gpt-5.5"
+    }
+  },
+  "check_cmds": [
+    "python -c \"import pathlib, py_compile, tempfile; cfile=pathlib.Path(tempfile.gettempdir()) / 'orchestrate_agents.orchestration-smoke.pyc'; py_compile.compile('scripts/orchestrate_agents.py', cfile=str(cfile), doraise=True); cfile.unlink(missing_ok=True)\""
+  ]
+}

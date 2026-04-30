@@ -1,0 +1,29 @@
+{
+  "cycles": 3,
+  "task_name": "mixed-agent-task",
+  "phase": "phase1_mixed-codex-gemini",
+  "min_score": 90,
+  "readonly_guard": true,
+  "agents": {
+    "plan": {
+      "provider": "gemini",
+      "model": "gemini-2.5-pro"
+    },
+    "do": {
+      "provider": "codex",
+      "model": "gpt-5.4"
+    },
+    "see": {
+      "provider": "codex",
+      "model": "gpt-5.4"
+    },
+    "convention": {
+      "provider": "gemini",
+      "model": "gemini-2.5-pro"
+    }
+  },
+  "check_cmds": [
+    "npx tsc --noEmit",
+    "npm run build"
+  ]
+}
