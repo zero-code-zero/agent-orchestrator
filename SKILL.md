@@ -76,6 +76,10 @@ user a short clarification question before running the orchestrator.
 
 ## Run Pattern
 
+Keep the outer `plan -> do -> see -> convention` roles as independent CLI
+processes with separate prompt/output artifacts. A role may use subagents
+internally, but the outer role remains accountable for its own artifact.
+
 Prefer JSON output for AI callers:
 
 ```powershell

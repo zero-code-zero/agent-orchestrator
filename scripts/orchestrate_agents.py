@@ -57,6 +57,10 @@ class CommandResult:
     stderr: str
     timed_out: bool = False
     timeout_seconds: int | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    duration_ms: int | None = None
+    error_summary: str | None = None
 
 
 def truncate_text(value: str | None, limit: int = MAX_RESULT_OUTPUT_CHARS) -> str:
@@ -69,6 +73,28 @@ def truncate_text(value: str | None, limit: int = MAX_RESULT_OUTPUT_CHARS) -> st
 
 def now_stamp() -> str:
     return dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def now_iso() -> str:
+    return dt.datetime.now().isoformat()
+
+
+def duration_ms(started_at: dt.datetime, finished_at: dt.datetime) -> int:
+    return round((finished_at - started_at).total_seconds() * 1000)
+
+
+def summarize_error(status: str, return_code: int | None, stderr: str | None) -> str | None:
+    if status in {"ok", "skipped", "disabled"}:
+        return None
+    if stderr:
+        first_line = next((line.strip() for line in stderr.splitlines() if line.strip()), "")
+        if first_line:
+            return first_line[:240]
+    if status == "timeout":
+        return "Command timed out."
+    if return_code is not None:
+        return f"Command exited with code {return_code}."
+    return status
 
 
 def slugify(value: str) -> str:
@@ -187,6 +213,7 @@ def run_shell_command(
     input_text: str | None = None,
     timeout_seconds: int | None = None,
 ) -> CommandResult:
+    started = dt.datetime.now()
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     process = subprocess.Popen(
         command,
@@ -204,26 +231,96 @@ def run_shell_command(
 
     try:
         stdout, stderr = process.communicate(input=input_text, timeout=timeout_seconds)
+        finished = dt.datetime.now()
+        status = "ok" if process.returncode == 0 else "failed"
+        truncated_stderr = truncate_text(stderr)
         return CommandResult(
-            status="ok" if process.returncode == 0 else "failed",
+            status=status,
             return_code=process.returncode,
             stdout=truncate_text(stdout),
-            stderr=truncate_text(stderr),
+            stderr=truncated_stderr,
             timed_out=False,
             timeout_seconds=timeout_seconds,
+            started_at=started.isoformat(),
+            finished_at=finished.isoformat(),
+            duration_ms=duration_ms(started, finished),
+            error_summary=summarize_error(status, process.returncode, truncated_stderr),
         )
     except subprocess.TimeoutExpired:
         terminate_process_tree(process)
         stdout, stderr = process.communicate()
+        finished = dt.datetime.now()
         timeout_message = f"Command timed out after {timeout_seconds} seconds."
         stderr = "\n".join(part for part in [stderr, timeout_message] if part)
+        truncated_stderr = truncate_text(stderr)
         return CommandResult(
             status="timeout",
             return_code=None,
             stdout=truncate_text(stdout),
-            stderr=truncate_text(stderr),
+            stderr=truncated_stderr,
             timed_out=True,
             timeout_seconds=timeout_seconds,
+            started_at=started.isoformat(),
+            finished_at=finished.isoformat(),
+            duration_ms=duration_ms(started, finished),
+            error_summary=summarize_error("timeout", None, truncated_stderr),
+        )
+
+
+def run_argv_command(
+    argv: list[str],
+    *,
+    cwd: Path,
+    timeout_seconds: int | None = None,
+) -> CommandResult:
+    started = dt.datetime.now()
+    process = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+        start_new_session=os.name != "nt",
+    )
+
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+        finished = dt.datetime.now()
+        status = "ok" if process.returncode == 0 else "failed"
+        truncated_stderr = truncate_text(stderr)
+        return CommandResult(
+            status=status,
+            return_code=process.returncode,
+            stdout=truncate_text(stdout),
+            stderr=truncated_stderr,
+            timed_out=False,
+            timeout_seconds=timeout_seconds,
+            started_at=started.isoformat(),
+            finished_at=finished.isoformat(),
+            duration_ms=duration_ms(started, finished),
+            error_summary=summarize_error(status, process.returncode, truncated_stderr),
+        )
+    except subprocess.TimeoutExpired:
+        terminate_process_tree(process)
+        stdout, stderr = process.communicate()
+        finished = dt.datetime.now()
+        timeout_message = f"Command timed out after {timeout_seconds} seconds."
+        stderr = "\n".join(part for part in [stderr, timeout_message] if part)
+        truncated_stderr = truncate_text(stderr)
+        return CommandResult(
+            status="timeout",
+            return_code=None,
+            stdout=truncate_text(stdout),
+            stderr=truncated_stderr,
+            timed_out=True,
+            timeout_seconds=timeout_seconds,
+            started_at=started.isoformat(),
+            finished_at=finished.isoformat(),
+            duration_ms=duration_ms(started, finished),
+            error_summary=summarize_error("timeout", None, truncated_stderr),
         )
 
 
@@ -238,12 +335,32 @@ def run_agent_command(
     prompt_text = read_text(prompt_file)
 
     if not config.enabled:
+        timestamp = now_iso()
         write_text(output_file, placeholder_output(config.name, "disabled"))
-        return CommandResult("disabled", None, "", "", timeout_seconds=config.timeout_seconds)
+        return CommandResult(
+            "skipped",
+            None,
+            "",
+            "",
+            timeout_seconds=config.timeout_seconds,
+            started_at=timestamp,
+            finished_at=timestamp,
+            duration_ms=0,
+        )
 
     if not config.command:
+        timestamp = now_iso()
         write_text(output_file, placeholder_output(config.name, "command-not-configured"))
-        return CommandResult("command-not-configured", None, "", "", timeout_seconds=config.timeout_seconds)
+        return CommandResult(
+            "skipped",
+            None,
+            "",
+            "",
+            timeout_seconds=config.timeout_seconds,
+            started_at=timestamp,
+            finished_at=timestamp,
+            duration_ms=0,
+        )
 
     values = {
         "prompt_file": str(prompt_file),
@@ -287,6 +404,8 @@ def run_agent_command(
     elif "output_file" not in placeholders:
         write_text(output_file, completed.stdout or "")
     elif not output_file.exists():
+        completed.status = "missing_output"
+        completed.error_summary = "Command referenced `{output_file}` but did not create it."
         write_text(
             output_file,
             "\n".join([
@@ -592,18 +711,39 @@ def compact_command_status(result: dict | None) -> dict:
         "status": result.get("status"),
         "return_code": result.get("return_code"),
         "timed_out": bool(result.get("timed_out", False)),
+        "duration_ms": result.get("duration_ms"),
+        "error_summary": result.get("error_summary"),
+    }
+
+
+def build_stage_result(
+    *,
+    stage: str,
+    kind: str,
+    result: CommandResult | dict,
+    artifact: str | None = None,
+    log: str | None = None,
+) -> dict:
+    raw = result.__dict__ if isinstance(result, CommandResult) else result
+    return {
+        "stage": stage,
+        "kind": kind,
+        "status": raw.get("status"),
+        "return_code": raw.get("return_code"),
+        "started_at": raw.get("started_at"),
+        "finished_at": raw.get("finished_at"),
+        "duration_ms": raw.get("duration_ms"),
+        "timed_out": bool(raw.get("timed_out", False)),
+        "timeout_seconds": raw.get("timeout_seconds"),
+        "artifact": artifact,
+        "log": log,
+        "error_summary": raw.get("error_summary"),
     }
 
 
 def has_blocking_failure(cycle_entry: dict) -> bool:
-    results = cycle_entry.get("results", {})
-    for agent in ("plan", "do", "see", "convention"):
-        status = results.get(agent, {}).get("status")
-        if status in {"failed", "timeout"}:
-            return True
-
-    for check in results.get("checks", []):
-        if check.get("status") != "ok" or check.get("return_code") != 0:
+    for stage in cycle_entry.get("stages", []):
+        if stage.get("status") in {"failed", "timeout", "missing_output"}:
             return True
 
     return False
@@ -640,6 +780,7 @@ def build_run_summary(manifest: dict, run_dir: Path, exit_code: int) -> dict:
             "cycle": last_cycle.get("cycle") if isinstance(last_cycle, dict) else None,
             "artifacts": artifacts,
             "review_files": review_files,
+            "stages": last_cycle.get("stages", []) if isinstance(last_cycle, dict) else [],
             "checks": results.get("checks", []),
             "agents": {
                 "plan": compact_command_status(results.get("plan")),
@@ -660,19 +801,86 @@ def write_run_state(manifest: dict, run_dir: Path, exit_code: int) -> dict:
     return summary
 
 
-def run_check_commands(commands: Iterable[str], cycle_dir: Path, timeout_seconds: int | None = None) -> list[dict]:
+def normalize_check_spec(raw: str | dict, index: int, default_timeout: int | None) -> dict:
+    if isinstance(raw, str):
+        return {
+            "name": f"check-{index}",
+            "command": raw,
+            "cmd": raw,
+            "mode": "shell",
+            "timeout_seconds": default_timeout,
+        }
+
+    if not isinstance(raw, dict):
+        raise ValueError(f"Check spec #{index} must be a string or object")
+
+    cmd = raw.get("cmd", raw.get("command"))
+    if isinstance(cmd, list):
+        if not cmd or not all(isinstance(part, str) for part in cmd):
+            raise ValueError(f"Check spec #{index} cmd array must contain strings")
+        mode = "argv"
+    elif isinstance(cmd, str):
+        mode = "shell"
+    else:
+        raise ValueError(f"Check spec #{index} must provide `cmd` as a string or string array")
+
+    timeout = raw.get("timeout_seconds", raw.get("timeout", default_timeout))
+    return {
+        "name": str(raw.get("name") or f"check-{index}"),
+        "command": " ".join(cmd) if isinstance(cmd, list) else cmd,
+        "cmd": cmd,
+        "mode": mode,
+        "timeout_seconds": int(timeout) if timeout is not None else None,
+    }
+
+
+def load_check_file(path: Path) -> list[dict]:
+    with path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    if isinstance(data, dict):
+        checks = data.get("checks")
+    else:
+        checks = data
+
+    if not isinstance(checks, list):
+        raise ValueError(f"Check file must be a JSON array or object with `checks`: {path}")
+
+    return [check for check in checks]
+
+
+def load_check_files(paths: list[str]) -> list[dict]:
+    specs: list[dict] = []
+    for value in paths:
+        check_file = repo_path(value)
+        if not check_file.exists():
+            raise FileNotFoundError(f"Check file not found: {check_file}")
+        specs.extend(load_check_file(check_file))
+    return specs
+
+
+def run_check_commands(commands: Iterable[str | dict], cycle_dir: Path, timeout_seconds: int | None = None) -> list[dict]:
     results: list[dict] = []
-    for index, command in enumerate(commands, start=1):
-        completed = run_shell_command(
-            command,
-            cwd=REPO_ROOT,
-            timeout_seconds=timeout_seconds,
-        )
+    for index, raw_command in enumerate(commands, start=1):
+        check = normalize_check_spec(raw_command, index, timeout_seconds)
+        if check["mode"] == "argv":
+            completed = run_argv_command(
+                check["cmd"],
+                cwd=REPO_ROOT,
+                timeout_seconds=check["timeout_seconds"],
+            )
+        else:
+            completed = run_shell_command(
+                check["cmd"],
+                cwd=REPO_ROOT,
+                timeout_seconds=check["timeout_seconds"],
+            )
         log_file = cycle_dir / f"check-{index}.log"
         write_text(
             log_file,
             "\n".join([
-                f"$ {command}",
+                f"$ {check['command']}",
+                f"mode: {check['mode']}",
                 "",
                 "## stdout",
                 completed.stdout or "",
@@ -682,12 +890,18 @@ def run_check_commands(commands: Iterable[str], cycle_dir: Path, timeout_seconds
             ]),
         )
         results.append({
-            "command": command,
+            "name": check["name"],
+            "command": check["command"],
+            "mode": check["mode"],
             "return_code": completed.return_code,
             "log": rel(log_file),
             "status": completed.status,
             "timed_out": completed.timed_out,
-            "timeout_seconds": timeout_seconds,
+            "timeout_seconds": check["timeout_seconds"],
+            "started_at": completed.started_at,
+            "finished_at": completed.finished_at,
+            "duration_ms": completed.duration_ms,
+            "error_summary": completed.error_summary,
         })
     return results
 
@@ -739,6 +953,12 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         help="Shell command to run after do/see. May be specified multiple times.",
+    )
+    parser.add_argument(
+        "--check-file",
+        action="append",
+        default=[],
+        help="JSON file containing check specs. A spec may use `cmd` as argv array to avoid shell quoting.",
     )
     return parser.parse_args()
 
@@ -819,6 +1039,20 @@ def merge_checks(cli_checks: list[str], preset: dict) -> list[str]:
     if not isinstance(preset_checks, list):
         preset_checks = []
     return [str(check) for check in preset_checks] + cli_checks
+
+
+def merge_check_specs(cli_checks: list[str], check_files: list[str], preset: dict) -> list[str | dict]:
+    checks: list[str | dict] = list(merge_checks(cli_checks, preset))
+
+    preset_check_files = preset.get("check_files", preset.get("check_file", []))
+    if isinstance(preset_check_files, str):
+        preset_check_files = [preset_check_files]
+    if not isinstance(preset_check_files, list):
+        preset_check_files = []
+
+    checks.extend(load_check_files([str(path) for path in preset_check_files]))
+    checks.extend(load_check_files(check_files))
+    return checks
 
 
 def codex_command(sandbox: str, model: str | None) -> str:
@@ -907,9 +1141,9 @@ def main() -> int:
     args.convention = args.convention if args.convention is not None else preset_bool(preset, "run_convention", preset_bool(preset, "convention", True))
     args.readonly_guard = args.readonly_guard if args.readonly_guard is not None else preset_bool(preset, "readonly_guard", True)
     checks_enabled = args.checks if args.checks is not None else preset_bool(preset, "checks_enabled", True)
-    args.check_cmd = merge_checks(args.check_cmd, preset) if checks_enabled else []
     args.agent_timeout = args.agent_timeout if args.agent_timeout is not None else optional_int(preset.get("agent_timeout_seconds", preset.get("agent_timeout")))
     args.check_timeout = args.check_timeout if args.check_timeout is not None else optional_int(preset.get("check_timeout_seconds", preset.get("check_timeout")))
+    check_specs = merge_check_specs(args.check_cmd, args.check_file, preset) if checks_enabled else []
 
     task_file = repo_path(args.task)
     if not task_file.exists():
@@ -1025,6 +1259,7 @@ def main() -> int:
             "started_at": dt.datetime.now().isoformat(),
             "artifacts": {},
             "results": {},
+            "stages": [],
         }
         manifest["cycles"].append(cycle_entry)
         write_run_state(manifest, run_dir, 1)
@@ -1043,6 +1278,12 @@ def main() -> int:
                 write_text(cycle_dir / "plan.readonly-warning.md", "\n".join(["# Plan changed repository files", "", *plan_changes]))
         cycle_entry["results"]["plan"] = plan_result.__dict__
         cycle_entry["artifacts"]["plan"] = rel(plan_file)
+        cycle_entry["stages"].append(build_stage_result(
+            stage="plan",
+            kind="agent",
+            result=plan_result,
+            artifact=rel(plan_file),
+        ))
         write_run_state(manifest, run_dir, 1)
 
         plan_text = read_text(plan_file)
@@ -1054,11 +1295,24 @@ def main() -> int:
         do_result = run_agent_command(configs["do"], do_prompt_file, do_file, run_dir, cycle_dir, cycle)
         cycle_entry["results"]["do"] = do_result.__dict__
         cycle_entry["artifacts"]["do"] = rel(do_file)
+        cycle_entry["stages"].append(build_stage_result(
+            stage="do",
+            kind="agent",
+            result=do_result,
+            artifact=rel(do_file),
+        ))
         write_run_state(manifest, run_dir, 1)
 
-        check_results = run_check_commands(args.check_cmd, cycle_dir, args.check_timeout)
+        check_results = run_check_commands(check_specs, cycle_dir, args.check_timeout)
         if check_results:
             cycle_entry["results"]["checks"] = check_results
+            for index, check_result in enumerate(check_results, start=1):
+                cycle_entry["stages"].append(build_stage_result(
+                    stage=f"check-{index}",
+                    kind="check",
+                    result=check_result,
+                    log=check_result.get("log"),
+                ))
             write_run_state(manifest, run_dir, 1)
 
         do_text = read_text(do_file)
@@ -1080,6 +1334,12 @@ def main() -> int:
             see_text = read_text(see_file)
             cycle_entry["results"]["see"] = see_result.__dict__
             cycle_entry["artifacts"]["see"] = rel(see_file)
+            cycle_entry["stages"].append(build_stage_result(
+                stage="see",
+                kind="agent",
+                result=see_result,
+                artifact=rel(see_file),
+            ))
             write_run_state(manifest, run_dir, 1)
 
         if configs["convention"].enabled:
@@ -1097,6 +1357,12 @@ def main() -> int:
             convention_text = read_text(convention_file)
             cycle_entry["results"]["convention"] = convention_result.__dict__
             cycle_entry["artifacts"]["convention"] = rel(convention_file)
+            cycle_entry["stages"].append(build_stage_result(
+                stage="convention",
+                kind="agent",
+                result=convention_result,
+                artifact=rel(convention_file),
+            ))
             write_run_state(manifest, run_dir, 1)
 
         see_metadata = extract_json_metadata(see_text, "see") if cycle_entry["results"].get("see", {}).get("status") == "ok" else {}

@@ -14,6 +14,12 @@ Failed reviews feed the next cycle, so the main model can inspect structured
 results and decide whether to continue, summarize, or ask the user a sharper
 question.
 
+The top-level role boundary is intentionally CLI-based: `plan`, `do`, `see`, and
+`convention` run as separate processes with their own prompts and artifacts.
+Those agents may still use subagents internally, but each role remains
+responsible for its own output instead of passing uncertainty to another shared
+session.
+
 ## Runtime Contract
 
 Input:
@@ -184,6 +190,18 @@ The JSON stdout is intentionally compact:
   "summary_json": "docs/work-history/example/phase1/summary.json",
   "cycles_run": 1,
   "last_cycle": {
+    "stages": [
+      {
+        "stage": "see",
+        "kind": "agent",
+        "status": "ok",
+        "return_code": 0,
+        "duration_ms": 12345,
+        "artifact": "docs/work-history/example/phase1/cycle-01/see.md",
+        "log": null,
+        "error_summary": null
+      }
+    ],
     "review_files": [
       "docs/work-history/example/phase1/cycle-01/see.md",
       "docs/work-history/example/phase1/cycle-01/convention.md"
@@ -201,6 +219,10 @@ The JSON stdout is intentionally compact:
   }
 }
 ```
+
+`last_cycle.stages` is the normalized result stream for both agents and checks.
+Common stage statuses are `ok`, `failed`, `timeout`, `skipped`, and
+`missing_output`.
 
 Use `next_action` as the main branch point:
 
@@ -306,6 +328,31 @@ python scripts\orchestrate_agents.py `
 
 Check results are passed into `see`, so the review agent can use parent-run
 evidence instead of rerunning commands unnecessarily.
+
+To avoid shell quoting issues, prefer `--check-file` with argv-style commands:
+
+```json
+{
+  "checks": [
+    {
+      "name": "build",
+      "cmd": ["npm", "run", "build"],
+      "timeout_seconds": 300
+    },
+    {
+      "name": "unit-tests",
+      "cmd": ["npm", "test"]
+    }
+  ]
+}
+```
+
+```powershell
+python scripts\orchestrate_agents.py `
+  --task docs\tasks\my-task.md `
+  --check-file docs\tasks\my-task.checks.json `
+  --output-format json
+```
 
 Long-running agents and checks can be bounded:
 

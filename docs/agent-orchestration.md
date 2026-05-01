@@ -30,6 +30,35 @@ docs/work-history/
 - See: compares the plan against the implementation and writes a review.
 - Convention: runs after see and checks whether the result follows repo conventions.
 
+## Orchestrator vs Subagents
+
+This is not an either/or choice. The recommended boundary is:
+
+- Run `plan`, `do`, `see`, and `convention` as independent top-level CLI
+  processes.
+- Allow each top-level role to use its own in-session subagents internally when
+  that helps with exploration, implementation slices, or review.
+
+Keeping the top-level roles independent prevents responsibility from drifting
+between shared subagents. `plan` must produce a plan it can stand behind, `do`
+must report exactly what it changed, and `see` must review from its own clean
+context instead of inheriting the implementer's assumptions.
+
+Use in-session subagents inside a role when the work benefits from fast
+parallel context gathering, bounded helper tasks, or local review that does not
+need a durable artifact boundary.
+
+Use this orchestrator for the outer loop when the work needs a reproducible task
+contract, separated plan/do/see/convention artifacts, check logs, review
+thresholds, or a durable audit trail under `docs/work-history`.
+
+Practical default:
+
+- Small direct fixes: main agent edits directly.
+- Fast exploration or parallel review inside one role: in-session subagents.
+- Risky changes, quality gates, or work that needs history: orchestrator.
+- Start with `plan/do/see`; add `convention` when style or placement risk is material.
+
 ## Model Baseline
 
 The workflow is designed around GPT-5.5-class behavior. The default Codex preset
@@ -272,6 +301,35 @@ python scripts/orchestrate_agents.py `
 For CI-style usage where an unfinished see review should fail the command, add
 `--require-pass`.
 
+## Check Files
+
+For checks that contain complex arguments, prefer a JSON check file over
+PowerShell-heavy inline strings:
+
+```json
+{
+  "checks": [
+    {
+      "name": "build",
+      "cmd": ["npm", "run", "build"],
+      "timeout_seconds": 300
+    }
+  ]
+}
+```
+
+Run it with:
+
+```powershell
+python scripts/orchestrate_agents.py `
+  --task docs/tasks/example.md `
+  --check-file docs/tasks/example.checks.json `
+  --output-format json
+```
+
+When `cmd` is an array, the orchestrator runs it without a shell. String checks
+remain supported for backward compatibility.
+
 ## AI Main Output
 
 When the caller is a main AI model, prefer JSON stdout:
@@ -304,8 +362,15 @@ The summary includes:
 - `run_json`
 - `summary_json`
 - `cycles_run`
+- `last_cycle.stages`
 - `last_cycle.review_files`
 - compact `see` and `convention` status objects
+
+`last_cycle.stages` is the normalized result stream for both agent and check
+steps. Every entry includes `stage`, `kind`, `status`, `return_code`,
+`started_at`, `finished_at`, `duration_ms`, optional `artifact` or `log`, and
+`error_summary`. Common statuses are `ok`, `failed`, `timeout`, `skipped`, and
+`missing_output`.
 
 Use `next_action` as the main routing signal:
 
